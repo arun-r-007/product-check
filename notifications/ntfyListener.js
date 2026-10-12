@@ -22,6 +22,7 @@ function startNtfyListener(topic, onStopCallback) {
   if (!topic || isListening) return;
   isListening = true;
   abortController = new AbortController();
+  const listenerStartUnix = Math.floor(Date.now() / 1000);
 
   logger.info(`[ntfy] Listening for remote stop commands on topic: "${topic}"...`);
 
@@ -52,8 +53,12 @@ function startNtfyListener(topic, onStopCallback) {
             if (!line.trim()) continue;
             try {
               const data = JSON.parse(line);
-              // Listen for published messages
-              if (data.event === 'message' && data.message) {
+              // Listen for newly published messages only
+              if (
+                data.event === 'message' &&
+                data.message &&
+                (!data.time || data.time >= listenerStartUnix)
+              ) {
                 const text = String(data.message).trim();
                 // If the message is a stop command
                 if (isStopCommand(text)) {

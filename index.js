@@ -1,3 +1,4 @@
+const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
@@ -17,6 +18,118 @@ let browserInstance = null;
 let alreadyNotified = false;
 let inContinuousAlertLoop = false;
 global.stopRequested = false;
+
+/**
+ * Returns the current date (YYYY-MM-DD), hour (0-23), and minute (0-59) in Indian Standard Time (Asia/Kolkata).
+ */
+function getIstTimeParts(date = new Date()) {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  });
+  const parts = {};
+  for (const p of formatter.formatToParts(date)) {
+    parts[p.type] = p.value;
+  }
+  const dateStr = `${parts.year}-${parts.month}-${parts.day}`;
+  const hour = parseInt(parts.hour, 10) % 24;
+  const minute = parseInt(parts.minute, 10);
+  return { dateStr, hour, minute };
+}
+
+/**
+ * Parses DAILY_STATUS_TIME (e.g. "10:30") into targetHour and targetMinute in IST.
+ */
+function parseDailyTargetTime(rawTime = '10:30') {
+  const match = String(rawTime || '10:30')
+    .trim()
+    .match(/^(\d{1,2}):(\d{2})$/);
+  const targetHour = match ? Math.min(23, Math.max(0, parseInt(match[1], 10))) : 10;
+  const targetMinute = match ? Math.min(59, Math.max(0, parseInt(match[2], 10))) : 30;
+  const ampm = targetHour >= 12 ? 'PM' : 'AM';
+  const displayHour = targetHour % 12 === 0 ? 12 : targetHour % 12;
+  const displayMin = String(targetMinute).padStart(2, '0');
+  return {
+    targetHour,
+    targetMinute,
+    label: `${displayHour}:${displayMin} ${ampm} IST`
+  };
+}
+
+/**
+ * Checks both local state file and remote ntfy.sh 24h message cache to see if an
+ * Out-of-Stock notification was already sent today (in IST). Prevents duplicate notifications
+ * across container restarts on Render/Railway.
+ */
+async function resolveLastDailySentDate(stateFilePath, topic) {
+  let lastSentDate = null;
+
+  // 1. Check local state file
+  try {
+    if (fs.existsSync(stateFilePath)) {
+      const parsed = JSON.parse(fs.readFileSync(stateFilePath, 'utf8'));
+      if (parsed && parsed.lastSentDate) {
+        lastSentDate = parsed.lastSentDate;
+      }
+    }
+  } catch (e) {}
+
+  // 2. Check remote ntfy topic cache (last 24h) in case container filesystem was reset on cloud restart
+  if (topic) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      const res = await fetch(`https://ntfy.sh/${topic}/json?poll=1&since=24h`, {
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+
+      if (res.ok) {
+        const text = await res.text();
+        const lines = text.split('\n');
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const data = JSON.parse(line);
+            if (
+              data.event === 'message' &&
+              data.time &&
+              data.message &&
+              /out of stock/i.test(data.message)
+            ) {
+              const msgIst = getIstTimeParts(new Date(data.time * 1000));
+              if (!lastSentDate || msgIst.dateStr > lastSentDate) {
+                lastSentDate = msgIst.dateStr;
+              }
+            }
+          } catch (e) {}
+        }
+      }
+    } catch (e) {}
+  }
+
+  return lastSentDate;
+}
+
+function saveLastDailySentDate(stateFilePath, dateStr) {
+  try {
+    const dir = path.dirname(stateFilePath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.writeFileSync(
+      stateFilePath,
+      JSON.stringify({ lastSentDate: dateStr, updatedAt: new Date().toISOString() }, null, 2),
+      'utf8'
+    );
+  } catch (e) {}
+}
 
 function isStopCommand(raw) {
   if (!raw) return false;
@@ -157,19 +270,32 @@ async function main() {
 
   const monitorIntervalMs = config.simulation.monitorInterval || config.monitoring.intervalSeconds * 1000;
 
-  // Heartbeat interval when product is Out of Stock (default: 1440 minutes = once per day, configurable via HEARTBEAT_INTERVAL_MINUTES in .env)
+  // Daily Out-of-Stock notification configuration (once every 24 hours, sent after 10:30 AM IST)
   const heartbeatMinutes =
     process.env.HEARTBEAT_INTERVAL_MINUTES !== undefined
       ? parseFloat(process.env.HEARTBEAT_INTERVAL_MINUTES)
       : 1440;
-  const heartbeatIntervalMs = heartbeatMinutes > 0 ? heartbeatMinutes * 60 * 1000 : null;
-  if (heartbeatIntervalMs) {
-    const label = heartbeatMinutes === 1440 ? '24 hours (once per day)' : `${heartbeatMinutes} min(s)`;
-    logger.info(`Status heartbeat: Updates sent every ${label} while Size ${config.product.size} is Out of Stock.`);
-  }
+  const dailySchedule = parseDailyTargetTime(process.env.DAILY_STATUS_TIME || '10:30');
+  const dailyStateFile = path.join(__dirname, 'logs', 'daily_status_state.json');
 
-  let lastHeartbeatTime = Date.now();
-  let initialStatusSent = false;
+  let lastDailySentDate = await resolveLastDailySentDate(dailyStateFile, config.ntfy.topic);
+  const startupIst = getIstTimeParts();
+
+  if (heartbeatMinutes > 0) {
+    logger.info(
+      `[Daily Schedule] Out-of-Stock notification set to ONCE per day (every 24h) after ${dailySchedule.label}.`
+    );
+    if (lastDailySentDate === startupIst.dateStr) {
+      logger.info(
+        `[Daily Schedule] Today's Out-of-Stock update (${startupIst.dateStr}) was already sent. Next update scheduled for tomorrow after ${dailySchedule.label}.`
+      );
+      saveLastDailySentDate(dailyStateFile, lastDailySentDate);
+    } else {
+      logger.info(
+        `[Daily Schedule] Next Out-of-Stock update will be sent once today (${startupIst.dateStr}) at/after ${dailySchedule.label}.`
+      );
+    }
+  }
 
   while (true) {
     let browser = null;
@@ -194,11 +320,14 @@ async function main() {
 
       // --- STATE: Monitoring Loop ---
       logger.info(`[Step 3/3] Monitoring Size ${config.product.size} (${config.product.color}) availability...`);
+      let checksInCurrentSession = 0;
+
       while (true) {
         if (page.isClosed()) {
           throw new Error('Browser page was closed unexpectedly.');
         }
 
+        checksInCurrentSession++;
         logger.action(`Checking Flipkart stock for "${config.product.name}" (Color: ${config.product.color}, Size: ${config.product.size})...`);
         const productResult = await checkProductAvailability(page, config);
 
@@ -287,41 +416,29 @@ async function main() {
         } else {
           logger.warn(`Status: ${productResult.reason}`);
 
-          // Initial status notification on first check
-          if (!initialStatusSent) {
-            initialStatusSent = true;
-            lastHeartbeatTime = Date.now();
-            const initialMsg = `🔍 Flipkart Monitor Connected: Watching "${config.product.name}" (Color: ${productResult.selectedColor}, Size: ${config.product.size}). Currently Out of Stock — checking every ${monitorIntervalMs / 1000}s.`;
+          // Daily Out-of-Stock notification: Send ONLY once per day (every 24 hours) after 10:30 AM IST
+          if (heartbeatMinutes > 0) {
+            const nowIst = getIstTimeParts();
+            const isAfterTargetTime =
+              nowIst.hour > dailySchedule.targetHour ||
+              (nowIst.hour === dailySchedule.targetHour && nowIst.minute >= dailySchedule.targetMinute);
 
-            if (config.notifications.twilioWhatsApp) {
-              logger.info('Sending initial status verification to WhatsApp...');
-              const sendWhatsAppNotification = require('./notifications/whatsapp');
-              sendWhatsAppNotification(config.product.name, initialMsg).catch((err) => {
-                logger.error('Failed to send initial WhatsApp alert:', err.message);
-              });
-            }
-            if (config.notifications.ntfy) {
-              logger.info('Sending initial status verification to ntfy...');
-              const sendPushNotification = require('./notifications/push');
-              sendPushNotification(config.product.name, initialMsg, page.url(), { isAlert: false });
-            }
-          } else if (heartbeatIntervalMs) {
-            // Heartbeat status notification every N minutes
-            const now = Date.now();
-            if (now - lastHeartbeatTime >= heartbeatIntervalMs) {
-              lastHeartbeatTime = now;
-              const heartbeatMsg = `🔍 Flipkart Monitor Heartbeat: "${config.product.name}" (Color: ${productResult.selectedColor}, Size: ${config.product.size}) is still Out of Stock. Monitoring active every ${monitorIntervalMs / 1000}s.`;
+            if (isAfterTargetTime && lastDailySentDate !== nowIst.dateStr) {
+              lastDailySentDate = nowIst.dateStr;
+              saveLastDailySentDate(dailyStateFile, lastDailySentDate);
 
-              logger.info(`[Heartbeat] Sending ${heartbeatMinutes}-min status update to active notification channels...`);
+              const dailyMsg = `📅 Daily Stock Update (${dailySchedule.label}): "${config.product.name}" (Color: ${productResult.selectedColor}, Size: ${config.product.size}) is currently Out of Stock (${nowIst.dateStr}). Next Out-of-Stock update in 24 hours.`;
+
+              logger.info(`[Daily Schedule] Sending daily Out-of-Stock update for ${nowIst.dateStr} (after ${dailySchedule.label})...`);
               if (config.notifications.twilioWhatsApp) {
                 const sendWhatsAppNotification = require('./notifications/whatsapp');
-                sendWhatsAppNotification(config.product.name, heartbeatMsg).catch((err) => {
-                  logger.error('Failed to send heartbeat WhatsApp alert:', err.message);
+                sendWhatsAppNotification(config.product.name, dailyMsg).catch((err) => {
+                  logger.error('Failed to send daily WhatsApp status:', err.message);
                 });
               }
               if (config.notifications.ntfy) {
                 const sendPushNotification = require('./notifications/push');
-                sendPushNotification(config.product.name, heartbeatMsg, page.url(), { isAlert: false });
+                await sendPushNotification(config.product.name, dailyMsg, page.url(), { isAlert: false });
               }
             }
           }
@@ -332,11 +449,24 @@ async function main() {
         // Wait for interval
         await sleep(monitorIntervalMs);
 
+        // Recycle Chromium every 50 checks (~4 mins) to keep memory footprint flat on 512MB cloud servers
+        if (checksInCurrentSession >= 50) {
+          logger.info('Recycling browser session to keep memory usage clean...');
+          break;
+        }
+
         // Reload Flipkart product page to catch stock updates immediately
         logger.action('Reloading Flipkart product page...');
         await page.reload({ waitUntil: 'domcontentloaded', timeout: 45000 });
         await sleep(config.simulation.pageLoadDelay || 2000);
         await openProductPage.waitForProductPage(page);
+      }
+
+      if (browser) {
+        try {
+          await browser.close();
+        } catch (closeErr) {}
+        browserInstance = null;
       }
     } catch (err) {
       logger.error('Error encountered in monitoring loop. Attempting recovery and browser restart in 10 seconds...', err);

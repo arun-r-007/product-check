@@ -62,7 +62,17 @@ async function launchBrowser(config) {
     '--no-sandbox',
     '--disable-setuid-sandbox',
     '--disable-dev-shm-usage',
-    '--disable-gpu'
+    '--disable-gpu',
+    '--disable-extensions',
+    '--disable-background-networking',
+    '--disable-default-apps',
+    '--disable-sync',
+    '--disable-translate',
+    '--mute-audio',
+    '--no-first-run',
+    '--disk-cache-size=1',
+    '--media-cache-size=1',
+    '--js-flags=--max-old-space-size=256'
   ];
 
   if (!isHeadless) {
@@ -103,6 +113,18 @@ async function launchBrowser(config) {
   }
 
   const context = await browser.newContext(contextOptions);
+
+  // In headless mode (e.g., Render 512MB container), block heavy images, fonts, and media
+  // to keep RAM usage low across thousands of 5-second page reloads.
+  if (isHeadless) {
+    await context.route('**/*', (route) => {
+      const type = route.request().resourceType();
+      if (type === 'image' || type === 'media' || type === 'font') {
+        return route.abort();
+      }
+      return route.continue();
+    });
+  }
 
   // Bypass simple automated testing checks
   const page = await context.newPage();

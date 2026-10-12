@@ -188,8 +188,8 @@ function renderProductionDashboard() {
     process.env.PRODUCT_URL ||
     'https://www.flipkart.com/woodland-slip-lightweight-comfortable-easy-wear-casuals-men/p/itm28c3d46f85a6c?pid=SHOFXHQCVGM4NRCE&marketplace=FLIPKART';
   const alertInterval = process.env.ALERT_INTERVAL_SECONDS || '2';
-  const heartbeatMinutes = process.env.HEARTBEAT_INTERVAL_MINUTES || '1440';
-  const heartbeatLabel = String(heartbeatMinutes) === '1440' ? '1/day' : `${heartbeatMinutes}m`;
+  const dailyTime = process.env.DAILY_STATUS_TIME || '10:30';
+  const heartbeatLabel = `1/day after ${dailyTime} AM IST`;
   const stopStatus = global.stopRequested ? '🔴 Alerts Silenced' : '🟢 Active & Monitoring';
 
   return `<!DOCTYPE html>
