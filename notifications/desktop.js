@@ -3,7 +3,7 @@ const logger = require('../utils/logger');
 
 let hasNotifiedDesktop = false;
 
-function sendDesktopNotification(movieName) {
+function sendDesktopNotification(productName) {
   // If user already stopped alerts or desktop toast was already shown, don't spam Windows
   if (global.stopRequested || hasNotifiedDesktop) {
     return;
@@ -11,10 +11,10 @@ function sendDesktopNotification(movieName) {
   hasNotifiedDesktop = true;
 
   try {
-    logger.info(`Triggering desktop notification for ${movieName}...`);
+    logger.info(`Triggering desktop notification for ${productName}...`);
     notifier.notify({
-      title: '🎉 BookMyShow Tickets Open!',
-      message: `Movie: ${movieName}\nBookMyShow booking is now available. Open the app to book immediately.`,
+      title: '🎉 Flipkart Product In Stock!',
+      message: `${productName}\nis now AVAILABLE on Flipkart! Open the browser to buy immediately.`,
       sound: true,
       wait: false
     }, (err) => {

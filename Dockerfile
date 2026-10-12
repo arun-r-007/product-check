@@ -1,5 +1,5 @@
-# Use official Microsoft Playwright v1.64.0 image with all Chromium OS dependencies pre-installed
-FROM mcr.microsoft.com/playwright:v1.64.0-jammy
+# Use official Microsoft Playwright image with all Chromium OS dependencies pre-installed
+FROM mcr.microsoft.com/playwright:v1.52.0-jammy
 
 # Set working directory
 WORKDIR /app
@@ -21,5 +21,5 @@ ENV PORT=3000
 # Expose local server and webhook port
 EXPOSE 3000
 
-# Start the continuous booking monitor
+# Start the continuous Flipkart product monitor
 CMD ["npm", "start"]

@@ -5,9 +5,8 @@ require('dotenv').config({ path: path.join(__dirname, '.env') });
 const logger = require('./utils/logger');
 const { getConfig, sleep } = require('./utils/helpers');
 const launchBrowser = require('./browser/launch');
-const openBookingPage = require('./browser/openBookingPage');
-const { checkCinemaPresence, parseTargets } = require('./browser/checkCinema');
-const { checkShowtimesBeforeCutoff } = require('./browser/checkShowtimes');
+const openProductPage = require('./browser/openProductPage');
+const { checkProductAvailability } = require('./browser/checkProduct');
 const { dispatchAllNotifications } = require('./notifications/manager');
 const { dismissDesktopNotifications } = require('./notifications/desktop');
 const { startNtfyListener, stopNtfyListener } = require('./notifications/ntfyListener');
@@ -54,7 +53,7 @@ function waitForEnter(timeoutMs) {
       resolve();
     }, timeoutMs);
 
-    logger.action(`\n👉 PRESS [ENTER] IN THIS CONSOLE OR WAIT ${timeoutMs / 1000} SECONDS TO CLOSE THE BROWSER...`);
+    logger.action(`\n👉 PRESS [ENTER] IN THIS CONSOLE OR WAIT ${Math.round(timeoutMs / 1000)} SECONDS TO CLOSE THE BROWSER...`);
 
     process.stdin.resume();
     process.stdin.setEncoding('utf8');
@@ -75,49 +74,55 @@ async function main() {
     process.exit(1);
   }
 
-  // Override configuration with central environment variables if defined
-  if (process.env.MOVIE_NAME) {
-    config.movie.name = process.env.MOVIE_NAME;
+  // Initialize product config with .env overrides
+  config.product = config.product || {};
+  if (process.env.PRODUCT_NAME) {
+    config.product.name = process.env.PRODUCT_NAME.trim();
   }
-  if (process.env.MOVIE_CITY) {
-    config.movie.city = process.env.MOVIE_CITY;
+  if (process.env.PRODUCT_COLOR) {
+    config.product.color = process.env.PRODUCT_COLOR.trim();
+  }
+  if (process.env.PRODUCT_SIZE) {
+    config.product.size = String(process.env.PRODUCT_SIZE).trim();
+  }
+  if (process.env.PRODUCT_URL) {
+    config.product.url = process.env.PRODUCT_URL.trim();
   }
 
-  config.booking = config.booking || {};
-  if (process.env.BOOKING_URL) {
-    config.booking.url = process.env.BOOKING_URL.trim();
+  config.product.name = config.product.name || 'WOODLAND Slip On Casuals For Men';
+  config.product.color = config.product.color || 'DNAVY 4';
+  config.product.size = String(config.product.size || '7');
+
+  config.ntfy = config.ntfy || {};
+  if (process.env.NTFY_TOPIC) {
+    config.ntfy.topic = process.env.NTFY_TOPIC.trim();
   }
-  if (process.env.TARGET_CINEMA) {
-    config.booking.cinemaText = process.env.TARGET_CINEMA.trim();
-  }
-  config.booking.targetTimeBefore =
-    process.env.TARGET_TIME_BEFORE || config.booking.targetTimeBefore || '10:00 AM';
+  config.ntfy.topic = config.ntfy.topic || 'flipkart-woodland-size7-alerts';
+
+  const activePort = process.env.PORT || 3001;
 
   // Override dryRun with command line arg if present
   if (isDryRunArg) {
     config.monitoring.dryRun = true;
   }
 
-  logger.info('Starting BookMyShow Cinema & Early Showtime Monitor...');
-  logger.info(`Mode: ${config.monitoring.dryRun ? 'DRY-RUN (Mock Simulation)' : 'PRODUCTION (BookMyShow Site)'}`);
+  logger.info('Starting Flipkart Product Availability Monitor...');
+  logger.info(`Mode: ${config.monitoring.dryRun ? 'DRY-RUN (Mock Flipkart Simulation)' : 'PRODUCTION (Flipkart Live Site)'}`);
+  logger.info(`ntfy Topic: ${config.ntfy.topic} (Separate from BookMyShow ticket monitor)`);
 
-  // Always start the local server on port 3000 to listen for the WhatsApp webhook
+  // Start the local server on port 3001 for Dashboard, /stop endpoint, and WhatsApp webhook
   try {
     const isDryRun = config.monitoring.dryRun;
     const serverUrl = await startMockServer(isDryRun);
     if (isDryRun) {
-      config.booking.url = serverUrl;
-      config.movie.name = 'Jailer 2';
-      if (!config.booking.cinemaText) {
-        config.booking.cinemaText = 'Karpagam';
-      }
-      logger.info(`Dry-run target URL: ${config.booking.url}`);
+      config.product.url = `${serverUrl}/woodland-slip-lightweight-comfortable-easy-wear-casuals-men/p/itm28c3d46f85a6c?pid=SHOFXHQCVGM4NRCE&marketplace=FLIPKART`;
+      logger.info(`Dry-run target URL: ${config.product.url}`);
     } else {
-      logger.info(`[Webhook] Webhook endpoint active at: http://localhost:3000/api/whatsapp/webhook`);
+      logger.info(`[Dashboard] Live dashboard active at: http://localhost:${activePort}/dashboard`);
+      logger.info(`[Stop Control] Quick stop URL: http://localhost:${activePort}/stop`);
     }
   } catch (err) {
-    logger.error('Failed to start local web server', err);
-    process.exit(1);
+    logger.warn(`Local web server on port ${activePort} could not start (${err.message}). Continuing product monitor...`);
   }
 
   // Start background ntfy topic listener to allow typing "stop" inside the mobile app
@@ -127,30 +132,23 @@ async function main() {
     });
   }
 
-  // Validate the inputs before burning a browser launch
-  if (!config.booking.url || config.booking.url.trim() === '') {
-    logger.error('No booking URL configured. Set BOOKING_URL in .env and restart.');
+  // Validate product URL
+  if (!config.product.url || config.product.url.trim() === '') {
+    logger.error('No product URL configured. Set PRODUCT_URL in .env or config.json and restart.');
     stopMockServer();
     process.exit(1);
   }
 
-  const cinemaTargets = parseTargets(config.booking.cinemaText);
-  if (cinemaTargets.length === 0) {
-    logger.error('No cinema text configured. Set TARGET_CINEMA in .env and restart.');
-    stopMockServer();
-    process.exit(1);
-  }
-
-  const cutoffTime = config.booking.targetTimeBefore;
-  logger.info(`Target page: ${config.booking.url}`);
-  logger.info(`Watching for cinema text: ${cinemaTargets.join(' | ')}`);
-  logger.info(`Filter condition: Showtime scheduled strictly BEFORE ${cutoffTime}`);
+  logger.info(`Target Product: ${config.product.name}`);
+  logger.info(`Target Color:   ${config.product.color}`);
+  logger.info(`Target Size:    ${config.product.size}`);
+  logger.info(`Target URL:     ${config.product.url}`);
 
   // Graceful cleanup handler
   const cleanup = async (keepBrowserOpenDuration = 0) => {
     dismissDesktopNotifications();
     if (keepBrowserOpenDuration > 0 && browserInstance) {
-      logger.info(`Keeping browser open for inspection...`);
+      logger.info(`Keeping browser open so you can complete your Flipkart purchase...`);
       await waitForEnter(keepBrowserOpenDuration);
     }
 
@@ -177,14 +175,16 @@ async function main() {
   process.on('SIGTERM', () => cleanup(0));
 
   const monitorIntervalMs = config.simulation.monitorInterval || config.monitoring.intervalSeconds * 1000;
-  
-  // Heartbeat interval when tickets are not open (default: 10 minutes, configurable via HEARTBEAT_INTERVAL_MINUTES in .env)
-  const heartbeatMinutes = process.env.HEARTBEAT_INTERVAL_MINUTES !== undefined
-    ? parseFloat(process.env.HEARTBEAT_INTERVAL_MINUTES)
-    : 10;
+
+  // Heartbeat interval when product is Out of Stock (default: 1440 minutes = once per day, configurable via HEARTBEAT_INTERVAL_MINUTES in .env)
+  const heartbeatMinutes =
+    process.env.HEARTBEAT_INTERVAL_MINUTES !== undefined
+      ? parseFloat(process.env.HEARTBEAT_INTERVAL_MINUTES)
+      : 1440;
   const heartbeatIntervalMs = heartbeatMinutes > 0 ? heartbeatMinutes * 60 * 1000 : null;
   if (heartbeatIntervalMs) {
-    logger.info(`Status heartbeat: Updates sent every ${heartbeatMinutes} min(s) while tickets are not open (customizable via HEARTBEAT_INTERVAL_MINUTES in .env).`);
+    const label = heartbeatMinutes === 1440 ? '24 hours (once per day)' : `${heartbeatMinutes} min(s)`;
+    logger.info(`Status heartbeat: Updates sent every ${label} while Size ${config.product.size} is Out of Stock.`);
   }
 
   let lastHeartbeatTime = Date.now();
@@ -198,7 +198,7 @@ async function main() {
       resetScreenshotCounter();
 
       // --- STATE: Launching Browser ---
-      logger.info('[Step 1/6] Launching Chromium...');
+      logger.info('[Step 1/3] Launching Chromium...');
       const launchResult = await launchBrowser(config);
       browser = launchResult.browser;
       browserInstance = browser;
@@ -207,133 +207,48 @@ async function main() {
       logger.success('✓ Browser started.');
       await captureMilestone(page, 'browser_started');
 
-      // --- STATE: Direct navigation to the configured booking URL ---
-      await openBookingPage(page, config);
-
-      let activeCinemaName = cinemaTargets[0];
-      let navigatedToCinemaPage = false;
-
-      // Check if initial URL is already a cinema buytickets page
-      const currentUrl = page.url();
-      if (currentUrl.includes('/cinemas/') || currentUrl.includes('/cinema')) {
-        navigatedToCinemaPage = true;
-        logger.info(`[Step 2/6] Directly opened cinema page: ${currentUrl}`);
-      }
+      // --- STATE: Direct navigation to the configured Flipkart product URL ---
+      logger.info('[Step 2/3] Opening Flipkart product page...');
+      await openProductPage(page, config);
 
       // --- STATE: Monitoring Loop ---
+      logger.info(`[Step 3/3] Monitoring Size ${config.product.size} (${config.product.color}) availability...`);
       while (true) {
         if (page.isClosed()) {
           throw new Error('Browser page was closed unexpectedly.');
         }
 
-        // ==========================================
-        // STAGE 1: Discover Cinema & Navigate to Link
-        // ==========================================
-        if (!navigatedToCinemaPage) {
-          logger.action(`Scanning movie page for cinema "${cinemaTargets.join(' | ')}"...`);
-          const cinemaResult = await checkCinemaPresence(page, config);
+        logger.action(`Checking Flipkart stock for "${config.product.name}" (Color: ${config.product.color}, Size: ${config.product.size})...`);
+        const productResult = await checkProductAvailability(page, config);
 
-          if (!cinemaResult.found) {
-            logger.warn(`Status: ${cinemaResult.reason}`);
+        if (productResult.found) {
+          logger.success(`🎉 PRODUCT IN STOCK! ${productResult.reason}`);
+          await captureMilestone(page, 'product_in_stock');
 
-            // Send initial status notification on first check
-            if (!initialStatusSent) {
-              initialStatusSent = true;
-              lastHeartbeatTime = Date.now();
-              const initialMsg = `🔍 BMS Monitor Started: Monitoring "${config.movie.name}" in "${config.movie.city}". "${cinemaTargets.join(' / ')}" is not listed yet.`;
-              if (config.notifications.twilioWhatsApp) {
-                logger.info('Sending initial status verification to WhatsApp...');
-                const sendWhatsAppNotification = require('./notifications/whatsapp');
-                sendWhatsAppNotification(config.movie.name, initialMsg).catch((err) => {
-                  logger.error('Failed to send initial WhatsApp alert:', err.message);
-                });
-              }
-              if (config.notifications.ntfy) {
-                logger.info('Sending initial status verification to ntfy...');
-                const sendPushNotification = require('./notifications/push');
-                sendPushNotification(config.movie.name, initialMsg, page.url(), { isAlert: false });
-              }
-            } else if (heartbeatIntervalMs) {
-              // Heartbeat status notification every N minutes
-              const now = Date.now();
-              if (now - lastHeartbeatTime >= heartbeatIntervalMs) {
-                lastHeartbeatTime = now;
-                const heartbeatMsg = `🔍 BMS Monitor: "${cinemaTargets.join(' / ')}" is not listed yet for "${config.movie.name}" in "${config.movie.city}". Monitoring active every ${monitorIntervalMs / 1000}s.`;
-                logger.info(`[Heartbeat] Sending ${heartbeatMinutes}-min status update to active notification channels...`);
-                if (config.notifications.twilioWhatsApp) {
-                  const sendWhatsAppNotification = require('./notifications/whatsapp');
-                  sendWhatsAppNotification(config.movie.name, heartbeatMsg).catch((err) => {
-                    logger.error('Failed to send heartbeat WhatsApp alert:', err.message);
-                  });
-                }
-                if (config.notifications.ntfy) {
-                  const sendPushNotification = require('./notifications/push');
-                  sendPushNotification(config.movie.name, heartbeatMsg, page.url(), { isAlert: false });
-                }
-              }
-            }
-
-            logger.info(`Retrying cinema check in ${monitorIntervalMs / 1000} seconds...`);
-            await sleep(monitorIntervalMs);
-            logger.action('Reloading movie page to check for newly added cinemas...');
-            await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 });
-            await sleep(config.simulation.pageLoadDelay || 2000);
-            await openBookingPage.waitForShowtimesList(page);
-            continue;
-          }
-
-          // Cinema found on movie page!
-          activeCinemaName = cinemaResult.targetCinema || cinemaResult.matched[0] || cinemaTargets[0];
-          logger.success(`🎉 TARGET CINEMA FOUND: ${activeCinemaName}`);
-          await captureMilestone(page, 'cinema_found');
-
-          // If a dedicated cinema page URL exists, navigate to the "new link"
-          if (cinemaResult.cinemaUrl) {
-            logger.action(`Navigating to the cinema's new link: ${cinemaResult.cinemaUrl}`);
-            await page.goto(cinemaResult.cinemaUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-            await sleep(config.simulation.pageLoadDelay || 2000);
-            await openBookingPage.waitForShowtimesList(page);
-            await captureMilestone(page, 'cinema_new_link_loaded');
-          }
-
-          navigatedToCinemaPage = true;
-        }
-
-        // ========================================================
-        // STAGE 2: Scan Movie Showtimes Scheduled Before Cutoff Time
-        // ========================================================
-        logger.action(`Checking for movie showtimes before ${cutoffTime} at ${activeCinemaName}...`);
-        const showtimesResult = await checkShowtimesBeforeCutoff(page, config);
-
-        if (showtimesResult.found) {
-          const matchedTimes = showtimesResult.matchingShowtimes.map((s) => s.time).join(', ');
-          logger.success(`🎉 SHOWTIME FOUND BEFORE ${cutoffTime}! Times: ${matchedTimes}`);
-          await captureMilestone(page, 'showtime_found');
-
-          const alertLabel = `${config.movie.name} @ ${activeCinemaName} (${matchedTimes})`;
-          const customAlertMsg = `🎉 *EARLY SHOW AVAILABLE!* Tickets for *${config.movie.name}* at *${activeCinemaName}* are open for *${matchedTimes}* (< ${cutoffTime})! Book now: ${page.url()}`;
+          const pricePart = productResult.priceText ? ` at ${productResult.priceText}` : '';
+          const alertLabel = `${config.product.name} - Size ${config.product.size} (${productResult.selectedColor})${pricePart}`;
+          const customAlertMsg = `🎉 *FLIPKART IN STOCK ALERT!* *${config.product.name}* (Color: *${productResult.selectedColor}*, Size: *${config.product.size}*)${pricePart} is now AVAILABLE! Buy now: ${page.url()}`;
 
           if (!alreadyNotified) {
             alreadyNotified = true;
 
-            // Trigger notifications
+            // Trigger initial notifications
             logger.info('Triggering initial alerts across all configured channels...');
             await dispatchAllNotifications(alertLabel, config, customAlertMsg, page.url(), { isContinuous: false });
 
-            // Continuous rapid alert loop across all active notification channels (ntfy, desktop, whatsapp, etc.)
+            // Continuous rapid alert loop across all active notification channels
             inContinuousAlertLoop = true;
             global.stopRequested = false;
 
             logger.action('\n================================================================================');
-            logger.action('🚨🚨🚨 TICKETS ARE LIVE! CONTINUOUS RAPID ALERTS ACTIVE 🚨🚨🚨');
+            logger.action(`🚨🚨🚨 SIZE ${config.product.size} (${productResult.selectedColor}) IS IN STOCK! CONTINUOUS ALERTS ACTIVE 🚨🚨🚨`);
             logger.action('👉 TO STOP ALERTS (ANY OF THESE):');
             logger.action('   1. Type "stop" (or "STOP", "s", "q") + [ENTER] in this console');
-            logger.action('   2. OR inside the mobile ntfy app: type "stop" + Send, or tap [🛑 Stop Alerts]');
+            logger.action(`   2. OR inside the mobile ntfy app (${config.ntfy.topic}): type "stop" + Send, or tap [🛑 Stop Alerts]`);
             logger.action('   3. OR press [Ctrl+C] in this console');
-            logger.action('   4. OR open http://localhost:3000/stop in your browser');
+            logger.action(`   4. OR open http://localhost:${activePort}/stop in your browser`);
             logger.action('================================================================================\n');
 
-            // Setup robust case-insensitive readline listener + raw stdin listener
             const rl = readline.createInterface({
               input: process.stdin,
               output: process.stdout,
@@ -354,25 +269,24 @@ async function main() {
             let alertCount = 0;
             const alertIntervalSeconds = process.env.ALERT_INTERVAL_SECONDS
               ? parseFloat(process.env.ALERT_INTERVAL_SECONDS)
-              : (process.env.ALERT_GAP_MS ? parseInt(process.env.ALERT_GAP_MS, 10) / 1000 : 2);
+              : 2;
             const alertIntervalMs = Math.max(100, Math.round(alertIntervalSeconds * 1000));
 
             logger.info(`Repeated alert pace: Sending every ${alertIntervalSeconds} second(s) (customizable via ALERT_INTERVAL_SECONDS in .env)`);
 
             while (!global.stopRequested) {
               alertCount++;
-              logger.info(`[Continuous Alert #${alertCount}] Broadcasting alerts (every ${alertIntervalSeconds}s)...`);
+              logger.info(`[Continuous Alert #${alertCount}] Broadcasting stock alerts (every ${alertIntervalSeconds}s)...`);
               await dispatchAllNotifications(alertLabel, config, customAlertMsg, page.url(), { isContinuous: true });
 
               if (global.stopRequested) break;
 
-              // Fast micro-check loop every 50ms so stop command is acted upon instantaneously
               for (let elapsed = 0; elapsed < alertIntervalMs && !global.stopRequested; elapsed += 50) {
                 await sleep(Math.min(50, alertIntervalMs - elapsed));
               }
 
               if (alertCount % 5 === 0) {
-                logger.action(`🔔 Sent ${alertCount} alerts (every ${alertIntervalSeconds}s). Type "stop" + [ENTER] or visit http://localhost:3000/stop to silence.`);
+                logger.action(`🔔 Sent ${alertCount} alerts (every ${alertIntervalSeconds}s). Type "stop" + [ENTER] or visit http://localhost:${activePort}/stop to silence.`);
               }
             }
 
@@ -382,69 +296,67 @@ async function main() {
             } catch (e) {}
 
             inContinuousAlertLoop = false;
-            logger.success('✅ Continuous alert loop silenced. Booking page remains open for seat selection!');
+            logger.success('✅ Continuous alert loop silenced. Flipkart product page remains open for checkout!');
           } else {
-            logger.info('Showtime already reported. Duplicate alerts suppressed.');
+            logger.info('Product availability already reported. Duplicate alerts suppressed.');
           }
 
-          // Keep browser open so user can book tickets
+          // Keep browser open so user can add to cart / buy now
           await cleanup(config.simulation.keepBrowserOpenAfterSuccess || 1800000);
           return;
         } else {
-          logger.warn(`Status: ${showtimesResult.reason}`);
+          logger.warn(`Status: ${productResult.reason}`);
 
           // Initial status notification on first check
           if (!initialStatusSent) {
             initialStatusSent = true;
             lastHeartbeatTime = Date.now();
-            const allTimesStr = showtimesResult.allShowtimes.map((s) => s.time).join(', ') || 'None';
-            const initialMsg = `🔍 BMS Monitor Connected: "${activeCinemaName}" is open (${allTimesStr}), waiting for showtimes before "${cutoffTime}" for "${config.movie.name}".`;
+            const initialMsg = `🔍 Flipkart Monitor Connected: Watching "${config.product.name}" (Color: ${productResult.selectedColor}, Size: ${config.product.size}). Currently Out of Stock — checking every ${monitorIntervalMs / 1000}s.`;
 
             if (config.notifications.twilioWhatsApp) {
               logger.info('Sending initial status verification to WhatsApp...');
               const sendWhatsAppNotification = require('./notifications/whatsapp');
-              sendWhatsAppNotification(config.movie.name, initialMsg).catch((err) => {
+              sendWhatsAppNotification(config.product.name, initialMsg).catch((err) => {
                 logger.error('Failed to send initial WhatsApp alert:', err.message);
               });
             }
             if (config.notifications.ntfy) {
               logger.info('Sending initial status verification to ntfy...');
               const sendPushNotification = require('./notifications/push');
-              sendPushNotification(config.movie.name, initialMsg, page.url(), { isAlert: false });
+              sendPushNotification(config.product.name, initialMsg, page.url(), { isAlert: false });
             }
           } else if (heartbeatIntervalMs) {
             // Heartbeat status notification every N minutes
             const now = Date.now();
             if (now - lastHeartbeatTime >= heartbeatIntervalMs) {
               lastHeartbeatTime = now;
-              const allTimesStr = showtimesResult.allShowtimes.map((s) => s.time).join(', ') || 'None';
-              const heartbeatMsg = `🔍 BMS Monitor: "${activeCinemaName}" has shows (${allTimesStr}), but no show before "${cutoffTime}" yet for "${config.movie.name}". Still monitoring every ${monitorIntervalMs / 1000}s.`;
+              const heartbeatMsg = `🔍 Flipkart Monitor Heartbeat: "${config.product.name}" (Color: ${productResult.selectedColor}, Size: ${config.product.size}) is still Out of Stock. Monitoring active every ${monitorIntervalMs / 1000}s.`;
 
               logger.info(`[Heartbeat] Sending ${heartbeatMinutes}-min status update to active notification channels...`);
               if (config.notifications.twilioWhatsApp) {
                 const sendWhatsAppNotification = require('./notifications/whatsapp');
-                sendWhatsAppNotification(config.movie.name, heartbeatMsg).catch((err) => {
+                sendWhatsAppNotification(config.product.name, heartbeatMsg).catch((err) => {
                   logger.error('Failed to send heartbeat WhatsApp alert:', err.message);
                 });
               }
               if (config.notifications.ntfy) {
                 const sendPushNotification = require('./notifications/push');
-                sendPushNotification(config.movie.name, heartbeatMsg, page.url(), { isAlert: false });
+                sendPushNotification(config.product.name, heartbeatMsg, page.url(), { isAlert: false });
               }
             }
           }
 
-          logger.info(`Retrying showtimes check in ${monitorIntervalMs / 1000} seconds...`);
+          logger.info(`Retrying Flipkart stock check in ${monitorIntervalMs / 1000} seconds...`);
         }
 
         // Wait for interval
         await sleep(monitorIntervalMs);
 
-        // Reload cinema page to catch new showtimes the instant they are added
-        logger.action('Reloading cinema showtimes page...');
-        await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 });
+        // Reload Flipkart product page to catch stock updates immediately
+        logger.action('Reloading Flipkart product page...');
+        await page.reload({ waitUntil: 'domcontentloaded', timeout: 45000 });
         await sleep(config.simulation.pageLoadDelay || 2000);
-        await openBookingPage.waitForShowtimesList(page);
+        await openProductPage.waitForProductPage(page);
       }
     } catch (err) {
       logger.error('Error encountered in monitoring loop. Attempting recovery and browser restart in 10 seconds...', err);

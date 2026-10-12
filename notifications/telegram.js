@@ -1,7 +1,7 @@
 const axios = require('axios');
 const logger = require('../utils/logger');
 
-async function sendTelegramNotification(movieName) {
+async function sendTelegramNotification(productName) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const config = require('../utils/helpers').getConfig();
   const chatId = config.telegram.chatId;
@@ -11,7 +11,7 @@ async function sendTelegramNotification(movieName) {
     return;
   }
 
-  const message = `🎉 <b>BOOKING OPEN</b>\n\n<b>Movie:</b> ${movieName}\n\nBook your tickets immediately!`;
+  const message = `🎉 <b>FLIPKART PRODUCT IN STOCK!</b>\n\n<b>Product:</b> ${productName}\n\nOrder immediately before it goes out of stock!`;
 
   try {
     logger.info('Sending Telegram notification...');

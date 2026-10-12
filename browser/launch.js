@@ -1,12 +1,47 @@
+const fs = require('fs');
+const path = require('path');
 const { chromium } = require('playwright');
 const logger = require('../utils/logger');
+
+/**
+ * Finds an available local Playwright Chromium executable in %LOCALAPPDATA%\ms-playwright
+ * if the exact version's binary isn't downloaded yet.
+ */
+function findFallbackChromiumExecutable() {
+  const localAppData = process.env.LOCALAPPDATA;
+  if (!localAppData) return null;
+
+  const pwDir = path.join(localAppData, 'ms-playwright');
+  if (!fs.existsSync(pwDir)) return null;
+
+  try {
+    const dirs = fs
+      .readdirSync(pwDir)
+      .filter((d) => d.startsWith('chromium-'))
+      .sort()
+      .reverse();
+
+    for (const dir of dirs) {
+      const candidates = [
+        path.join(pwDir, dir, 'chrome-win64', 'chrome.exe'),
+        path.join(pwDir, dir, 'chrome-win', 'chrome.exe')
+      ];
+      for (const exe of candidates) {
+        if (fs.existsSync(exe)) {
+          return exe;
+        }
+      }
+    }
+  } catch (e) {}
+  return null;
+}
 
 async function launchBrowser(config) {
   // Support environment variable or config setting for headless mode
   const isHeadless =
     process.env.HEADLESS !== undefined
       ? process.env.HEADLESS === 'true'
-      : (config.monitoring?.headless ?? false);
+      : (config?.monitoring?.headless ?? false);
 
   logger.info(`Launching Chromium browser in ${isHeadless ? 'HEADLESS' : 'HEADED'} mode...`);
 
@@ -22,10 +57,30 @@ async function launchBrowser(config) {
     launchArgs.push('--start-maximized');
   }
 
-  const browser = await chromium.launch({
-    headless: isHeadless,
-    args: launchArgs
-  });
+  let browser;
+  try {
+    browser = await chromium.launch({
+      headless: isHeadless,
+      args: launchArgs
+    });
+  } catch (err) {
+    const fallbackExe = findFallbackChromiumExecutable();
+    if (fallbackExe) {
+      logger.info(`Using installed Playwright Chromium binary: ${fallbackExe}`);
+      browser = await chromium.launch({
+        headless: isHeadless,
+        executablePath: fallbackExe,
+        args: launchArgs
+      });
+    } else {
+      logger.info('Falling back to system Google Chrome channel...');
+      browser = await chromium.launch({
+        headless: isHeadless,
+        channel: 'chrome',
+        args: launchArgs
+      });
+    }
+  }
 
   const contextOptions = {
     userAgent:

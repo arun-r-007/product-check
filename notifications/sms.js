@@ -1,7 +1,7 @@
 const axios = require('axios');
 const logger = require('../utils/logger');
 
-async function sendSMSNotification(movieName) {
+async function sendSMSNotification(productName) {
   const accountSid = process.env.TWILIO_ACCOUNT_SID || require('../utils/helpers').getConfig().twilio.accountSid;
   const authToken = process.env.TWILIO_AUTH_TOKEN;
   const config = require('../utils/helpers').getConfig();
@@ -12,7 +12,7 @@ async function sendSMSNotification(movieName) {
     return;
   }
 
-  const messageText = `BookMyShow tickets for ${movieName} are LIVE! Open the app immediately to book.`;
+  const messageText = `Flipkart Alert: ${productName} is now IN STOCK! Open Flipkart immediately to order.`;
   
   // Basic Auth header
   const authHeader = 'Basic ' + Buffer.from(`${accountSid}:${authToken}`).toString('base64');

@@ -1,13 +1,10 @@
 {
-  "movie": {
-    "name": "Gatta Kusthi 2",
-    "city": "Coimbatore",
-    "directUrl": ""
-  },
-  "booking": {
-    "url": "",
-    "cinemaText": "",
-    "targetTimeBefore": "10:00 AM"
+  "product": {
+    "name": "WOODLAND Slip On Casuals For Men",
+    "color": "DNAVY 4",
+    "size": "7",
+    "pid": "SHOFXHQCVGM4NRCE",
+    "url": "https://www.flipkart.com/woodland-slip-lightweight-comfortable-easy-wear-casuals-men/p/itm28c3d46f85a6c?pid=SHOFXHQCVGM4NRCE&marketplace=FLIPKART&lid=LSTSHOFXHQCVGM4NRCENSXFFB&fm=eyJ3dHAiOiJyZWNvIiwicHJwdCI6ImNscCIsIm1pZCI6ImZhY3RCYXNlZFJlY29tbWVuZGF0aW9uL3JlY2VudGx5Vmlld2VkIn0%3D&pageUID=1791787958174"
   },
   "monitoring": {
     "intervalSeconds": 5,
@@ -21,7 +18,7 @@
     "clickDelay": 500,
     "pageLoadDelay": 2000,
     "highlightDuration": 700,
-    "keepBrowserOpenAfterSuccess": 5000
+    "keepBrowserOpenAfterSuccess": 1800000
   },
   "notifications": {
     "desktop": true,
@@ -49,6 +46,6 @@
     "chatId": ""
   },
   "ntfy": {
-    "topic": "bms-movie-monitor-alerts"
+    "topic": "flipkart-woodland-size7-alerts"
   }
 }

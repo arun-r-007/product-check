@@ -1,7 +1,7 @@
 const axios = require('axios');
 const logger = require('../utils/logger');
 
-async function triggerPhoneCall(movieName) {
+async function triggerPhoneCall(productName) {
   const accountSid = process.env.TWILIO_ACCOUNT_SID || require('../utils/helpers').getConfig().twilio.accountSid;
   const authToken = process.env.TWILIO_AUTH_TOKEN;
   const config = require('../utils/helpers').getConfig();
@@ -13,7 +13,7 @@ async function triggerPhoneCall(movieName) {
   }
 
   // TwiML text-to-speech voice message
-  const twiml = `<Response><Say voice="alice">Hello. BookMyShow ticket booking for ${movieName} has started. Please open the app and book your tickets immediately.</Say></Response>`;
+  const twiml = `<Response><Say voice="alice">Hello. Your tracked Flipkart product ${productName} is now in stock. Please open Flipkart and place your order immediately.</Say></Response>`;
   
   // Basic Auth header
   const authHeader = 'Basic ' + Buffer.from(`${accountSid}:${authToken}`).toString('base64');

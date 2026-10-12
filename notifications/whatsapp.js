@@ -3,7 +3,7 @@ require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 const axios = require('axios');
 const logger = require('../utils/logger');
 
-async function sendWhatsAppNotification(movieName, customMessage = null) {
+async function sendWhatsAppNotification(productName, customMessage = null) {
   const accountSid = process.env.TWILIO_ACCOUNT_SID || require('../utils/helpers').getConfig().twilio.accountSid;
   const authToken = process.env.TWILIO_AUTH_TOKEN;
   const config = require('../utils/helpers').getConfig();
@@ -16,7 +16,7 @@ async function sendWhatsAppNotification(movieName, customMessage = null) {
 
   const rawFrom = whatsappFromNumber || fromNumber;
   const fromWhatsapp = rawFrom.startsWith('whatsapp:') ? rawFrom : `whatsapp:${rawFrom}`;
-  const messageText = customMessage || `🎉 BookMyShow tickets for *${movieName}* are LIVE! Open the app immediately to book.`;
+  const messageText = customMessage || `🎉 Flipkart Alert: *${productName}* is now IN STOCK! Open Flipkart immediately to buy.`;
 
   // Basic Auth header
   const authHeader = 'Basic ' + Buffer.from(`${accountSid}:${authToken}`).toString('base64');
