@@ -32,38 +32,23 @@ function isStopCommand(raw) {
   );
 }
 
+let cleanupFn = null;
+
 function requestStop(source = 'user command') {
   if (global.stopRequested) return;
   global.stopRequested = true;
   dismissDesktopNotifications();
-  logger.success(`🛑 Stop requested (${source})! Halting continuous alerts immediately...`);
+  logger.success(`🛑 Stop requested (${source})! Halting alerts and exiting immediately...`);
+  if (typeof cleanupFn === 'function') {
+    cleanupFn(0);
+  } else {
+    process.exit(0);
+  }
 }
+global.requestStop = requestStop;
 
 // Command line argument parser
 const isDryRunArg = process.argv.includes('--dry-run');
-
-/**
- * Halts execution until the user presses Enter or a timeout is reached
- */
-function waitForEnter(timeoutMs) {
-  return new Promise((resolve) => {
-    const handle = setTimeout(() => {
-      logger.info('Timeout reached. Automatically proceeding to shutdown...');
-      process.stdin.pause();
-      resolve();
-    }, timeoutMs);
-
-    logger.action(`\n👉 PRESS [ENTER] IN THIS CONSOLE OR WAIT ${Math.round(timeoutMs / 1000)} SECONDS TO CLOSE THE BROWSER...`);
-
-    process.stdin.resume();
-    process.stdin.setEncoding('utf8');
-    process.stdin.once('data', () => {
-      clearTimeout(handle);
-      process.stdin.pause();
-      resolve();
-    });
-  });
-}
 
 async function main() {
   let config;
@@ -144,35 +129,31 @@ async function main() {
   logger.info(`Target Size:    ${config.product.size}`);
   logger.info(`Target URL:     ${config.product.url}`);
 
-  // Graceful cleanup handler
-  const cleanup = async (keepBrowserOpenDuration = 0) => {
+  // Immediate cleanup & exit handler
+  let isCleaningUp = false;
+  const cleanup = async () => {
+    if (isCleaningUp) return;
+    isCleaningUp = true;
     dismissDesktopNotifications();
-    if (keepBrowserOpenDuration > 0 && browserInstance) {
-      logger.info(`Keeping browser open so you can complete your Flipkart purchase...`);
-      await waitForEnter(keepBrowserOpenDuration);
-    }
 
-    logger.info('Cleaning up resources and shutting down...');
+    logger.info('Cleaning up resources and shutting down immediately...');
+    stopMockServer();
+    stopNtfyListener();
     if (browserInstance) {
       try {
         await browserInstance.close();
         logger.success('✓ Browser closed.');
       } catch (err) {}
     }
-    stopMockServer();
-    stopNtfyListener();
     logger.success('✓ Cleanup complete. Monitor stopped.');
     process.exit(0);
   };
+  cleanupFn = cleanup;
 
   process.on('SIGINT', () => {
-    if (inContinuousAlertLoop && !global.stopRequested) {
-      requestStop('Ctrl+C shortcut');
-    } else {
-      cleanup(0);
-    }
+    requestStop('Ctrl+C shortcut');
   });
-  process.on('SIGTERM', () => cleanup(0));
+  process.on('SIGTERM', () => cleanup());
 
   const monitorIntervalMs = config.simulation.monitorInterval || config.monitoring.intervalSeconds * 1000;
 
@@ -296,13 +277,12 @@ async function main() {
             } catch (e) {}
 
             inContinuousAlertLoop = false;
-            logger.success('✅ Continuous alert loop silenced. Flipkart product page remains open for checkout!');
+            logger.success('✅ Continuous alert loop stopped. Exiting immediately...');
           } else {
             logger.info('Product availability already reported. Duplicate alerts suppressed.');
           }
 
-          // Keep browser open so user can add to cart / buy now
-          await cleanup(config.simulation.keepBrowserOpenAfterSuccess || 1800000);
+          await cleanup();
           return;
         } else {
           logger.warn(`Status: ${productResult.reason}`);

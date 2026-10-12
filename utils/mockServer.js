@@ -36,28 +36,37 @@ function startMockServer(isDryRun = true) {
           }
 
           res.writeHead(200, { 'Content-Type': 'text/xml' });
-          res.end('<Response></Response>');
+          res.end('<Response></Response>', () => {
+            if (global.stopRequested && typeof global.requestStop === 'function') {
+              global.requestStop(`WhatsApp webhook: "${messageText}"`);
+            }
+          });
         });
         return;
       }
 
-      // 2. Quick Browser Stop Endpoint: http://localhost:3000/stop
+      // 2. Quick Browser Stop Endpoint: http://localhost:3001/stop
       if (req.url === '/stop' || req.url === '/api/stop') {
-        logger.success('🛑 Stop command received via web browser (http://localhost:3000/stop)! Halting alerts immediately...');
-        global.stopRequested = true;
-        dismissDesktopNotifications();
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        res.end(`
+        res.end(
+          `
           <!DOCTYPE html>
           <html>
-            <head><meta charset="utf-8"><title>Alerts Silenced</title></head>
+            <head><meta charset="utf-8"><title>Monitor Stopped</title></head>
             <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;text-align:center;padding:50px;background:#0f172a;color:#f8fafc;">
-              <h1 style="color:#22c55e;font-size:32px;">✅ ALERTS SILENCED!</h1>
-              <p style="font-size:18px;color:#94a3b8;">Continuous notifications have been stopped.</p>
-              <p style="font-size:16px;color:#cbd5e1;">Your Flipkart product page window remains open so you can place your order.</p>
+              <h1 style="color:#22c55e;font-size:32px;">✅ MONITOR STOPPED &amp; EXITED!</h1>
+              <p style="font-size:18px;color:#94a3b8;">Alerts have been silenced and the monitor process has exited immediately.</p>
             </body>
           </html>
-        `);
+        `,
+          () => {
+            if (typeof global.requestStop === 'function') {
+              global.requestStop('web browser /stop endpoint');
+            } else {
+              process.exit(0);
+            }
+          }
+        );
         return;
       }
 
