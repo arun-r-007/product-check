@@ -4,42 +4,54 @@ const { chromium } = require('playwright');
 const logger = require('../utils/logger');
 
 /**
- * Finds an available local Playwright Chromium executable in %LOCALAPPDATA%\ms-playwright
- * if the exact version's binary isn't downloaded yet.
+ * Finds an available Playwright Chromium executable in local Windows %LOCALAPPDATA%\ms-playwright
+ * or Linux /ms-playwright if the exact version's binary isn't at the default path.
  */
 function findFallbackChromiumExecutable() {
-  const localAppData = process.env.LOCALAPPDATA;
-  if (!localAppData) return null;
+  const searchRoots = [];
+  if (process.env.PLAYWRIGHT_BROWSERS_PATH) {
+    searchRoots.push(process.env.PLAYWRIGHT_BROWSERS_PATH);
+  }
+  if (process.env.LOCALAPPDATA) {
+    searchRoots.push(path.join(process.env.LOCALAPPDATA, 'ms-playwright'));
+  }
+  searchRoots.push('/ms-playwright');
 
-  const pwDir = path.join(localAppData, 'ms-playwright');
-  if (!fs.existsSync(pwDir)) return null;
+  for (const pwDir of searchRoots) {
+    if (!fs.existsSync(pwDir)) continue;
+    try {
+      const dirs = fs
+        .readdirSync(pwDir)
+        .filter((d) => d.startsWith('chromium-') || d.startsWith('chromium_headless_shell-'))
+        .sort()
+        .reverse();
 
-  try {
-    const dirs = fs
-      .readdirSync(pwDir)
-      .filter((d) => d.startsWith('chromium-'))
-      .sort()
-      .reverse();
-
-    for (const dir of dirs) {
-      const candidates = [
-        path.join(pwDir, dir, 'chrome-win64', 'chrome.exe'),
-        path.join(pwDir, dir, 'chrome-win', 'chrome.exe')
-      ];
-      for (const exe of candidates) {
-        if (fs.existsSync(exe)) {
-          return exe;
+      for (const dir of dirs) {
+        const candidates = [
+          path.join(pwDir, dir, 'chrome-linux', 'chrome'),
+          path.join(pwDir, dir, 'chrome-linux', 'headless_shell'),
+          path.join(pwDir, dir, 'chrome-win64', 'chrome.exe'),
+          path.join(pwDir, dir, 'chrome-win', 'chrome.exe')
+        ];
+        for (const exe of candidates) {
+          if (fs.existsSync(exe)) {
+            return exe;
+          }
         }
       }
-    }
-  } catch (e) {}
+    } catch (e) {}
+  }
   return null;
 }
 
 async function launchBrowser(config) {
-  // Support environment variable or config setting for headless mode
-  const isHeadless =
-    process.env.HEADLESS !== undefined
+  // On Linux cloud servers (Render, Railway, Docker) without an X11 DISPLAY, always force headless mode
+  // even if HEADLESS=false was accidentally copied into environment variables.
+  const isLinuxWithoutDisplay = process.platform === 'linux' && !process.env.DISPLAY;
+
+  const isHeadless = isLinuxWithoutDisplay
+    ? true
+    : process.env.HEADLESS !== undefined
       ? process.env.HEADLESS === 'true'
       : (config?.monitoring?.headless ?? false);
 
@@ -73,12 +85,7 @@ async function launchBrowser(config) {
         args: launchArgs
       });
     } else {
-      logger.info('Falling back to system Google Chrome channel...');
-      browser = await chromium.launch({
-        headless: isHeadless,
-        channel: 'chrome',
-        args: launchArgs
-      });
+      throw err;
     }
   }
 
