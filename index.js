@@ -101,7 +101,7 @@ async function resolveLastDailySentDate(stateFilePath, topic) {
               data.event === 'message' &&
               data.time &&
               data.message &&
-              /out of stock/i.test(data.message)
+              /Flipkart Monitor Started|Daily Stock Update/i.test(data.message)
             ) {
               const msgIst = getIstTimeParts(new Date(data.time * 1000));
               if (!lastSentDate || msgIst.dateStr > lastSentDate) {
@@ -280,19 +280,20 @@ async function main() {
 
   let lastDailySentDate = await resolveLastDailySentDate(dailyStateFile, config.ntfy.topic);
   const startupIst = getIstTimeParts();
+  let initialStartedSent = lastDailySentDate === startupIst.dateStr;
 
   if (heartbeatMinutes > 0) {
     logger.info(
       `[Daily Schedule] Out-of-Stock notification set to ONCE per day (every 24h) after ${dailySchedule.label}.`
     );
-    if (lastDailySentDate === startupIst.dateStr) {
+    if (initialStartedSent) {
       logger.info(
-        `[Daily Schedule] Today's Out-of-Stock update (${startupIst.dateStr}) was already sent. Next update scheduled for tomorrow after ${dailySchedule.label}.`
+        `[Daily Schedule] Initial/Daily update for today (${startupIst.dateStr}) was already sent. Next update scheduled after 24h (tomorrow after ${dailySchedule.label}).`
       );
       saveLastDailySentDate(dailyStateFile, lastDailySentDate);
     } else {
       logger.info(
-        `[Daily Schedule] Next Out-of-Stock update will be sent once today (${startupIst.dateStr}) at/after ${dailySchedule.label}.`
+        `[Daily Schedule] Will send initial "Monitor Started" notification on first check, then next update after 24h (after ${dailySchedule.label}).`
       );
     }
   }
@@ -416,9 +417,29 @@ async function main() {
         } else {
           logger.warn(`Status: ${productResult.reason}`);
 
-          // Daily Out-of-Stock notification: Send ONLY once per day (every 24 hours) after 10:30 AM IST
-          if (heartbeatMinutes > 0) {
-            const nowIst = getIstTimeParts();
+          const nowIst = getIstTimeParts();
+
+          // 1. Send ONE initial "Started" message when the monitor first starts
+          if (!initialStartedSent) {
+            initialStartedSent = true;
+            lastDailySentDate = nowIst.dateStr;
+            saveLastDailySentDate(dailyStateFile, lastDailySentDate);
+
+            const startedMsg = `🚀 Flipkart Monitor Started: Watching "${config.product.name}" (Color: ${productResult.selectedColor}, Size: ${config.product.size}). Currently Out of Stock — checking every ${monitorIntervalMs / 1000}s. Next Out-of-Stock notification after 24 hours (after ${dailySchedule.label}).`;
+
+            logger.info('[Initial Status] Sending one-time "Monitor Started" notification...');
+            if (config.notifications.twilioWhatsApp) {
+              const sendWhatsAppNotification = require('./notifications/whatsapp');
+              sendWhatsAppNotification(config.product.name, startedMsg).catch((err) => {
+                logger.error('Failed to send initial WhatsApp status:', err.message);
+              });
+            }
+            if (config.notifications.ntfy) {
+              const sendPushNotification = require('./notifications/push');
+              await sendPushNotification(config.product.name, startedMsg, page.url(), { isAlert: false });
+            }
+          } else if (heartbeatMinutes > 0) {
+            // 2. Daily Out-of-Stock notification: Send ONCE per day (every 24 hours) after 10:30 AM IST
             const isAfterTargetTime =
               nowIst.hour > dailySchedule.targetHour ||
               (nowIst.hour === dailySchedule.targetHour && nowIst.minute >= dailySchedule.targetMinute);
@@ -427,7 +448,7 @@ async function main() {
               lastDailySentDate = nowIst.dateStr;
               saveLastDailySentDate(dailyStateFile, lastDailySentDate);
 
-              const dailyMsg = `📅 Daily Stock Update (${dailySchedule.label}): "${config.product.name}" (Color: ${productResult.selectedColor}, Size: ${config.product.size}) is currently Out of Stock (${nowIst.dateStr}). Next Out-of-Stock update in 24 hours.`;
+              const dailyMsg = `📅 Daily Stock Update (${dailySchedule.label}): "${config.product.name}" (Color: ${productResult.selectedColor}, Size: ${config.product.size}) is still Out of Stock (${nowIst.dateStr}). Next Out-of-Stock update in 24 hours (after ${dailySchedule.label}).`;
 
               logger.info(`[Daily Schedule] Sending daily Out-of-Stock update for ${nowIst.dateStr} (after ${dailySchedule.label})...`);
               if (config.notifications.twilioWhatsApp) {
